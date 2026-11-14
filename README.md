@@ -1,1 +1,0 @@
-# Scripts-Recibos-de-pagos-Fajas-Tendencia
