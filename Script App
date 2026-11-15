@@ -1,69 +1,361 @@
 // ==========================================
-// MÓDULO EXCLUSIVO PARA RECIBOS DE UTILIDADES (Actualizado por Columna K)
+// 1. CONFIGURACIÓN GLOBAL DE PLANTILLAS Y CARPETAS
+// ==========================================
+var ID_CARPETA_PRINCIPAL = '1qBq5HiWnLcryAcLuAKdaB_CfU3WqyW0X';
+
+var CONFIG_RECIBOS = {
+  pago: {
+    idPlantilla: '1eefNWaSFi2ICLeINughb2dsnkBa0emTH1Fd6O-mEHvQ',
+    prefijo: 'ReciboPago_',
+    titulo: 'Recibos de Pago',
+    mapear: mapearDatosNomina
+  },
+  cesta: {
+    idPlantilla: '1uB0A2KgYPelQ5ovN1HUcGBNgGLCcND3EGUe9Npocga4',
+    prefijo: 'Cestaticket_',
+    titulo: 'Recibos de Cestaticket',
+    mapear: mapearDatosNomina
+  },
+  utilidades: {
+    idPlantilla: '1F8-IOJ2m5l5mpnbY8RJ2u-prmtOiPg0LVG9xNBRX1kU',
+    prefijo: 'ReciboUtilidades_',
+    titulo: 'Recibos de Utilidades',
+    mapear: mapearDatosUtilidades
+  }
+};
+
+// ==========================================
+// 2. MENÚ Y NAVEGACIÓN EN GOOGLE SHEETS
+// ==========================================
+function onOpen() {
+  SpreadsheetApp.getUi().createMenu('🧾 Nómina PDFs')
+    .addItem('📄 Generar todos los RECIBO DE PAGO', 'mostrarModalGenerarTodosPago')
+    .addItem('🍽️ Generar todos los RECIBO DE CESTATICKET', 'mostrarModalGenerarTodosCesta')
+    .addItem('💰 Generar todos los RECIBO DE UTILIDADES', 'mostrarModalGenerarTodosUtilidades')
+    .addSeparator()
+    .addItem('👤 Generar un RECIBO DE PAGO', 'mostrarSelectorEmpleadoPago')
+    .addItem('👤 Generar un RECIBO DE CESTATICKET', 'mostrarSelectorEmpleadoCesta')
+    .addItem('👤 Generar un RECIBO DE UTILIDADES', 'mostrarSelectorEmpleadoUtilidades')
+    .addSeparator()
+    .addItem('📁 Abrir Carpeta de Recibos', 'abrirCarpeta')
+    .addToUi();
+}
+
+function abrirCarpeta() {
+  var ui = SpreadsheetApp.getUi();
+  var sheetName = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet().getName();
+  try {
+    var mainFolder = DriveApp.getFolderById(ID_CARPETA_PRINCIPAL);
+    var subcarpetas = mainFolder.getFoldersByName(sheetName);
+    var folderUrl = subcarpetas.hasNext() ? subcarpetas.next().getUrl() : mainFolder.getUrl();
+
+    var html = HtmlService.createHtmlOutput(
+      '<div style="font-family: Arial, sans-serif; text-align: center; padding: 20px;">' +
+      '<p style="font-size: 14px; color: #333;">Haz clic para ver los PDFs de <b>' + sheetName + '</b>:</p>' +
+      '<a href="' + folderUrl + '" target="_blank" style="background-color: #1a73e8; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block; margin-top: 15px;" onclick="setTimeout(function(){google.script.host.close()}, 500)">📁 Ir a Google Drive</a>' +
+      '</div>'
+    ).setWidth(350).setHeight(170);
+
+    ui.showModalDialog(html, 'Carpeta de Recibos');
+  } catch (e) {
+    ui.alert('Error', 'No se pudo acceder a la carpeta. Verifica el ID.', ui.ButtonSet.OK);
+  }
+}
+
+// ==========================================
+// 3. UTILIDADES DE FORMATO
+// ==========================================
+function formatearMoneda(valor) {
+  if (valor === "" || valor === null || typeof valor === 'undefined') return "0,00";
+  var num = (typeof valor === 'number') ? valor : parseFloat(valor.toString().trim().replace(/\./g, '').replace(',', '.'));
+  if (isNaN(num)) return "0,00";
+  var partes = num.toFixed(2).split('.');
+  partes[0] = partes[0].replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return partes.join(',');
+}
+
+function formatearCantidad(valor) {
+  if (valor === "" || valor === null || typeof valor === 'undefined') return "0";
+  var num = (typeof valor === 'number') ? valor : parseFloat(valor.toString().replace(',', '.'));
+  return isNaN(num) ? "0" : num.toString().replace('.', ',');
+}
+
+function formatearFecha(valor) {
+  if (!valor) return "";
+  if (valor instanceof Date) {
+    return ("0" + valor.getDate()).slice(-2) + "/" + ("0" + (valor.getMonth() + 1)).slice(-2) + "/" + valor.getFullYear();
+  }
+  return valor.toString();
+}
+
+function formatearMesAno(valor) {
+  if (!valor) return "";
+  var meses = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"];
+  if (valor instanceof Date) return meses[valor.getMonth()] + " " + valor.getFullYear();
+  var partes = valor.toString().trim().split("/");
+  return (partes.length === 3) ? meses[parseInt(partes[1], 10) - 1] + " " + partes[2] : valor.toString();
+}
+
+// ==========================================
+// 4. MAPEADORES DE COLUMNAS (INDEPENDIENTES)
 // ==========================================
 
-function obtenerDatosUtilidadesDeFila(fila, textoPeriodo) {
+// Mapeador 1: Hoja de Nómina Quincenal y Cestaticket (Intacto)
+function mapearDatosNomina(fila, data) {
+  var rawDesde = data[0][1];
+  var rawHasta = data[0][3];
+  var nombreBonoGlobal = data[1][44] ? data[1][44].toString().trim() : ""; // Celda AS2
+
   return {
-    trabajador: fila[0],                    // Columna A (0): Trabajador
-    cedula: fila[1],                        // Columna B (1): Cédula de Identidad
-    fechaIngreso: formatearFecha(fila[2]),  // Columna C (2): Fecha de Ingreso
-    cargo: fila[3],                         // Columna D (3): Cargo
-    
-    salarioDiario: formatearMoneda(fila[10]),       // K (10): Salario Diario en Bs
-    mesesCumplidos: formatearCantidad(fila[11]),    // L (11): Meses Cumplidos
-    diasUtilidades: formatearCantidad(fila[12]),    // M (12): Días de Utilidades
-    utilidadAsig: formatearMoneda(fila[14]),        // O (14): Asignación en Bs
-    incesBs: formatearMoneda(fila[16]),             // Q (16): Retención INCES Bs
-    totalPagar: formatearMoneda(fila[26]),          // AA (26): Total a Pagar Bs
-    
-    textoPeriodo: textoPeriodo                      // Ej: EJERCICIO FISCAL 2026
+    "<<TRABAJADOR>>": fila[0],
+    "<<CEDULA>>": fila[1] || "",
+    "<<FECHA_INGRESO>>": formatearFecha(fila[2]),
+    "<<CARGO>>": fila[3],
+    "<<PERIODO>>": formatearFecha(rawDesde) + " AL " + formatearFecha(rawHasta),
+    "<<PERIODO_CESTA>>": formatearMesAno(rawHasta),
+
+    // Salarios y asignaciones
+    "<<SUELDO>>": formatearMoneda(fila[8]),              // I
+    "<<SUELDO_DIARIO>>": formatearMoneda(fila[9]),       // J
+    "<<DIA_DES>>": formatearCantidad(fila[16]),          // Q
+    "<<CANT_FERIA>>": formatearCantidad(fila[17]),       // R
+    "<<DIA_INASIST>>": formatearCantidad(fila[18]),      // S
+    "<<CANT_HED>>": formatearCantidad(fila[19]),         // T
+    "<<CANT_HEN>>": formatearCantidad(fila[20]),         // U
+    "<<DIA_DES-LAB>>": formatearCantidad(fila[21]),      // V
+    "<<DIA_LAB>>": formatearCantidad(fila[22]),          // W
+    "<<ASIG_DIAS>>": formatearMoneda(fila[24]),          // Y
+    "<<ASIG_DESC>>": formatearMoneda(fila[26]),          // AA
+    "<<HED>>": formatearMoneda(fila[28]),                // AC
+    "<<HEN>>": formatearMoneda(fila[30]),                // AE
+    "<<ASIG_FERIA>>": formatearMoneda(fila[32]),         // AG
+    "<<ASIG_D_LAB>>": formatearMoneda(fila[34]),         // AI
+
+    // Bonos
+    "<<BONO_ASIST>>": formatearMoneda(fila[37]),         // AL
+    "<<BONO_GUERRA>>": formatearMoneda(fila[40]),        // AO
+    "<<BONO_TRANSP>>": formatearMoneda(fila[43]),        // AR
+    "<<NOMBRE_BONO_UNICO>>": nombreBonoGlobal,           // AS2
+    "<<ASIG_B_UNICO>>": formatearMoneda(fila[45]),       // AT
+
+    // Cestaticket
+    "<<CANT_INASIST_CESTA>>": formatearCantidad(fila[49]), // AX
+    "<<DED_INASIST_CESTA>>": formatearMoneda(fila[50]),   // AY
+    "<<CESTA_DIARIO>>": formatearMoneda(fila[52]),        // BA
+    "<<CESTA_30_DIAS>>": formatearMoneda(fila[53]),       // BB
+
+    // Deducciones y Totales
+    "<<DED_SSO>>": formatearMoneda(fila[60]),            // BI
+    "<<DED_PIDE>>": formatearMoneda(fila[61]),           // BJ
+    "<<DED_FAOV>>": formatearMoneda(fila[70]),           // BS
+    "<<TOTAL_DED>>": formatearMoneda(fila[71]),          // BT
+    "<<TOTAL_SALARIO>>": formatearMoneda(fila[72]),      // BU
+    "<<TOTAL_BONOS>>": formatearMoneda(fila[74]),        // BW
+    "<<CESTATICKET>>": formatearMoneda(fila[75]),        // BX
+    "<<TOTAL_ASIG>>": formatearMoneda(fila[76]),         // BY
+    "<<NETO_PAGAR>>": formatearMoneda(fila[77])          // BZ
   };
 }
 
-function reemplazarEtiquetasUtilidades(body, datos) {
-  body.replaceText("<<TRABAJADOR>>", datos.trabajador); 
-  body.replaceText("<<CEDULA>>", datos.cedula || ""); 
-  body.replaceText("<<FECHA_INGRESO>>", datos.fechaIngreso); 
-  body.replaceText("<<CARGO>>", datos.cargo); 
-  body.replaceText("<<AÑO_EN_CURSO>>", datos.textoPeriodo); 
-  
-  // Reemplazo de las nuevas etiquetas específicas de utilidades
-  body.replaceText("<<SALARIO_DIA>>", datos.salarioDiario); 
-  body.replaceText("<<MESES_CUMP>>", datos.mesesCumplidos);       
-  body.replaceText("<<DIAS_UTILIDAD>>", datos.diasUtilidades);       
-  body.replaceText("<<UTILIDAD_ASIG>>", datos.utilidadAsig);   
-  body.replaceText("<<TOTAL_UTILIDAD>>", datos.utilidadAsig);   
-  body.replaceText("<<DED_INCES>>", datos.incesBs);                
-  body.replaceText("<<TOTAL_PAGAR>>", datos.totalPagar);
-  
-  // Compatibilidad con etiquetas heredadas por si tu plantilla las usa
-  body.replaceText("<<SUELDO>>", datos.salarioDiario);
-  body.replaceText("<<DIA_LAB>>", datos.mesesCumplidos);
-  body.replaceText("<<ASIG_DIAS>>", "0,00"); 
-  body.replaceText("<<DIA_DES>>", datos.diasUtilidades);       
-  body.replaceText("<<ASIG_DESC>>", datos.utilidadAsig);   
-  body.replaceText("<<CANT_HED>>", "0"); body.replaceText("<<HED>>", "0,00");
-  body.replaceText("<<CANT_HEN>>", "0"); body.replaceText("<<HEN>>", "0,00");
-  body.replaceText("<<DIA_DES-LAB>>", "0"); body.replaceText("<<ASIG_D_LAB>>", "0,00");
-  body.replaceText("<<CANT_FERIA>>", "0"); body.replaceText("<<ASIG_FERIA>>", "0,00");
-  body.replaceText("<<DIA_INASIST>>", "0"); body.replaceText("<<TOTAL_SALARIO>>", datos.utilidadAsig);
-  body.replaceText("<<BONO_ASIST>>", "0,00");
-  body.replaceText("<<BONO_TRANSP>>", "0,00");
-  body.replaceText("<<BONO_GUERRA>>", "0,00");
-  
-  var searchResult = body.findText("<<NOMBRE_BONO_UNICO>>");
-  if (searchResult) {
-    var tableRow = searchResult.getElement().getParent().getParent().getParent();
-    if (tableRow.getType() === DocumentApp.ElementType.TABLE_ROW) {
-      tableRow.removeFromParent();
+// Mapeador 2: Hoja Exclusiva de Utilidades
+function mapearDatosUtilidades(fila) {
+  var utilidadBs = formatearMoneda(fila[15]); // Columna P
+  return {
+    "<<TRABAJADOR>>": fila[0],                         // A
+    "<<CEDULA>>": fila[1] || "",                       // B
+    "<<FECHA_INGRESO>>": formatearFecha(fila[2]),      // C
+    "<<CARGO>>": fila[3],                              // D
+    "<<AÑO_EN_CURSO>>": "EJERCICIO FISCAL " + new Date().getFullYear(),
+    "<<SUELDO>>": formatearMoneda(fila[8]),            // I
+    "<<SALARIO_DIA>>": formatearMoneda(fila[10]),      // K
+    "<<MESES_CUMP>>": formatearCantidad(fila[12]),     // M
+    "<<DIAS_UTILIDAD>>": formatearCantidad(fila[13]),  // N
+    "<<UTILIDAD_ASIG>>": utilidadBs,                   // P
+    "<<TOTAL_UTILIDAD>>": utilidadBs,                  // P
+    "<<DED_INCES>>": formatearMoneda(fila[17]),        // R
+    "<<TOTAL_PAGAR>>": formatearMoneda(fila[27])       // AB
+  };
+}
+
+// ==========================================
+// 5. MOTOR ÚNICO DE GENERACIÓN DE PDF
+// ==========================================
+function reemplazarEtiquetas(body, etiquetas) {
+  // Si existe bono único en la plantilla y su monto es 0,00 o no tiene nombre, elimina la fila
+  if (etiquetas.hasOwnProperty("<<NOMBRE_BONO_UNICO>>")) {
+    if (etiquetas["<<ASIG_B_UNICO>>"] === "0,00" || etiquetas["<<NOMBRE_BONO_UNICO>>"] === "") {
+      var match = body.findText("<<NOMBRE_BONO_UNICO>>");
+      if (match) {
+        var filaTabla = match.getElement().getParent().getParent().getParent();
+        if (filaTabla.getType() === DocumentApp.ElementType.TABLE_ROW) filaTabla.removeFromParent();
+      }
+      delete etiquetas["<<NOMBRE_BONO_UNICO>>"];
+      delete etiquetas["<<ASIG_B_UNICO>>"];
     }
   }
-  
-  body.replaceText("<<TOTAL_BONOS>>", "0,00");
-  body.replaceText("<<DED_SSO>>", datos.incesBs); 
-  body.replaceText("<<DED_FAOV>>", "0,00");
-  body.replaceText("<<DED_PIDE>>", "0,00");
-  body.replaceText("<<TOTAL_ASIG>>", datos.utilidadAsig);
-  body.replaceText("<<TOTAL_DED>>", datos.incesBs);
-  body.replaceText("<<NETO_PAGAR>>", datos.totalPagar);
+
+  // Reemplazo masivo en bucle
+  for (var tag in etiquetas) {
+    body.replaceText(tag, etiquetas[tag]);
+  }
+}
+
+function procesarReciboServidor(nombreEmpleado, tipo) {
+  var cfg = CONFIG_RECIBOS[tipo];
+  if (!cfg) throw new Error("Tipo de recibo no válido: " + tipo);
+
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  var sheetName = sheet.getName();
+  var data = sheet.getDataRange().getValues();
+
+  var filaEmpleado = null;
+  for (var i = 2; i < data.length; i++) {
+    if (data[i][0] === nombreEmpleado) {
+      filaEmpleado = data[i];
+      break;
+    }
+  }
+  if (!filaEmpleado) throw new Error("Empleado no encontrado: " + nombreEmpleado);
+
+  var mainFolder = DriveApp.getFolderById(ID_CARPETA_PRINCIPAL);
+  var carpetas = mainFolder.getFoldersByName(sheetName);
+  var targetFolder = carpetas.hasNext() ? carpetas.next() : mainFolder.createFolder(sheetName);
+
+  var docName = cfg.prefijo + nombreEmpleado + "_" + sheetName;
+  var tempFile = DriveApp.getFileById(cfg.idPlantilla).makeCopy(docName, targetFolder);
+  var tempDoc = DocumentApp.openById(tempFile.getId());
+  var body = tempDoc.getBody();
+
+  // Ejecuta el mapeador correspondiente al tipo de recibo y reemplaza etiquetas
+  var etiquetas = cfg.mapear(filaEmpleado, data);
+  reemplazarEtiquetas(body, etiquetas);
+
+  // Duplicar el contenido (Original Empleador / Copia Trabajador)
+  var totalHijos = body.getNumChildren();
+  for (var j = 0; j < totalHijos; j++) {
+    var copia = body.getChild(j).copy();
+    var tipoEl = copia.getType();
+    if (tipoEl == DocumentApp.ElementType.PARAGRAPH) body.appendParagraph(copia);
+    else if (tipoEl == DocumentApp.ElementType.TABLE) body.appendTable(copia);
+    else if (tipoEl == DocumentApp.ElementType.LIST_ITEM) body.appendListItem(copia);
+  }
+
+  tempDoc.saveAndClose();
+  targetFolder.createFile(tempFile.getAs(MimeType.PDF)).setName(docName + ".pdf");
+  tempFile.setTrashed(true);
+
+  return true;
+}
+
+function getListaEmpleados() {
+  var data = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet().getDataRange().getValues();
+  var empleados = [];
+  for (var i = 2; i < data.length; i++) {
+    if (data[i][0] && data[i][0] !== "") empleados.push(data[i][0]);
+  }
+  return empleados;
+}
+
+// ==========================================
+// 6. VENTANAS MODALES (MASIVO E INDIVIDUAL)
+// ==========================================
+function mostrarModalGenerarTodosPago()       { crearModalMasivo('pago'); }
+function mostrarModalGenerarTodosCesta()      { crearModalMasivo('cesta'); }
+function mostrarModalGenerarTodosUtilidades() { crearModalMasivo('utilidades'); }
+
+function mostrarSelectorEmpleadoPago()        { crearModalIndividual('pago'); }
+function mostrarSelectorEmpleadoCesta()       { crearModalIndividual('cesta'); }
+function mostrarSelectorEmpleadoUtilidades()  { crearModalIndividual('utilidades'); }
+
+function crearModalMasivo(tipo) {
+  var titulo = CONFIG_RECIBOS[tipo].titulo;
+  var htmlContent =
+    '<style>' +
+    '  .btn { border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer; font-weight: bold; margin-top: 15px; }' +
+    '  .btn-cancelar { background-color: #f1f1f1; color: #333; margin-right: 10px; }' +
+    '  .btn-generar { background-color: #1a73e8; color: white; }' +
+    '  @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }' +
+    '</style>' +
+    '<div id="step-1" style="font-family: Arial, sans-serif; padding: 15px; text-align: center;">' +
+    '  <p style="font-size: 15px; color: #333; margin-bottom: 20px;">¿Generar <b>TODOS</b> los ' + titulo + '?</p>' +
+    '  <button class="btn btn-cancelar" onclick="google.script.host.close()">Cancelar</button>' +
+    '  <button class="btn btn-generar" onclick="iniciar()">Comenzar</button>' +
+    '</div>' +
+    '<div id="step-2" style="font-family: Arial, sans-serif; padding: 25px 15px; text-align: center; display: none;">' +
+    '  <div style="border: 4px solid #f3f3f3; border-top: 4px solid #1a73e8; border-radius: 50%; width: 35px; height: 35px; animation: spin 1s linear infinite; margin: 0 auto 15px auto;"></div>' +
+    '  <p id="progress-text" style="font-size: 15px; color: #333; margin: 0;">Iniciando...</p>' +
+    '  <p id="progress-count" style="font-size: 12px; color: #666; margin: 8px 0 0 0; font-weight: bold;"></p>' +
+    '</div>' +
+    '<div id="step-3" style="font-family: Arial, sans-serif; padding: 25px 15px; text-align: center; display: none;">' +
+    '  <h2 style="color: #0f9d58; margin-top: 0;">¡Completado!</h2>' +
+    '  <p style="font-size: 14px; color: #333;">Se generaron todos los documentos.</p>' +
+    '  <button class="btn btn-generar" onclick="google.script.host.close()">Cerrar Ventana</button>' +
+    '</div>' +
+    '<script>' +
+    '  var lista = [], idx = 0, tipoDoc = "' + tipo + '";' +
+    '  function iniciar() {' +
+    '    document.getElementById("step-1").style.display = "none";' +
+    '    document.getElementById("step-2").style.display = "block";' +
+    '    google.script.run.withSuccessHandler(function(emp) { lista = emp; siguiente(); })' +
+    '      .withFailureHandler(function(e) { alert("Error: " + e.message); google.script.host.close(); }).getListaEmpleados();' +
+    '  }' +
+    '  function siguiente() {' +
+    '    if (idx >= lista.length) {' +
+    '      document.getElementById("step-2").style.display = "none";' +
+    '      document.getElementById("step-3").style.display = "block";' +
+    '      return;' +
+    '    }' +
+    '    document.getElementById("progress-text").innerHTML = "Generando:<br><b>" + lista[idx] + "</b>";' +
+    '    document.getElementById("progress-count").innerHTML = "Procesando " + (idx + 1) + " de " + lista.length;' +
+    '    google.script.run.withSuccessHandler(function() { idx++; siguiente(); })' +
+    '      .withFailureHandler(function(e) { alert("Error con " + lista[idx] + ": " + e.message); google.script.host.close(); })' +
+    '      .procesarReciboServidor(lista[idx], tipoDoc);' +
+    '  }' +
+    '</script>';
+
+  SpreadsheetApp.getUi().showModalDialog(HtmlService.createHtmlOutput(htmlContent).setWidth(360).setHeight(190), titulo);
+}
+
+function crearModalIndividual(tipo) {
+  var titulo = CONFIG_RECIBOS[tipo].titulo;
+  var optionsHtml = getListaEmpleados().map(function(emp) {
+    return '<option value="' + emp + '">' + emp + '</option>';
+  }).join('');
+
+  var htmlContent =
+    '<style>' +
+    '  .btn { border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer; font-weight: bold; }' +
+    '  .btn-cancelar { background-color: #f1f1f1; color: #333; margin-right: 10px; }' +
+    '  .btn-generar { background-color: #1a73e8; color: white; }' +
+    '  @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }' +
+    '</style>' +
+    '<div id="form-selector" style="font-family: Arial, sans-serif; padding: 15px;">' +
+    '  <p style="font-size: 14px; color: #333; margin-bottom: 12px;">Selecciona el trabajador:</p>' +
+    '  <select id="empleado" style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #ccc; font-size: 14px; margin-bottom: 20px;">' + optionsHtml + '</select>' +
+    '  <div style="text-align: right;">' +
+    '    <button class="btn btn-cancelar" onclick="google.script.host.close()">Cancelar</button>' +
+    '    <button class="btn btn-generar" onclick="generar()">Generar PDF</button>' +
+    '  </div>' +
+    '</div>' +
+    '<div id="mensaje-carga" style="font-family: Arial, sans-serif; padding: 30px 15px; text-align: center; display: none;">' +
+    '  <div style="border: 4px solid #f3f3f3; border-top: 4px solid #1a73e8; border-radius: 50%; width: 35px; height: 35px; animation: spin 1s linear infinite; margin: 0 auto 15px auto;"></div>' +
+    '  <p style="font-size: 14px; color: #333; font-weight: bold; margin: 0;">Generando documento...</p>' +
+    '</div>' +
+    '<script>' +
+    'function generar() {' +
+    '  var emp = document.getElementById("empleado").value;' +
+    '  document.getElementById("form-selector").style.display = "none";' +
+    '  document.getElementById("mensaje-carga").style.display = "block";' +
+    '  google.script.run.withSuccessHandler(function() { google.script.host.close(); })' +
+    '    .withFailureHandler(function(e) { alert("Error: " + e.message); google.script.host.close(); })' +
+    '    .generarReciboIndividualUI(emp, "' + tipo + '");' +
+    '}' +
+    '</script>';
+
+  SpreadsheetApp.getUi().showModalDialog(HtmlService.createHtmlOutput(htmlContent).setWidth(350).setHeight(170), 'Generar ' + titulo);
+}
+
+function generarReciboIndividualUI(nombreEmpleado, tipo) {
+  procesarReciboServidor(nombreEmpleado, tipo);
+  SpreadsheetApp.getUi().alert('¡Proceso Finalizado!', 'Documento de ' + nombreEmpleado + ' generado correctamente.', SpreadsheetApp.getUi().ButtonSet.OK);
 }
